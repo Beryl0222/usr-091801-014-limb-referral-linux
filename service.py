@@ -1,8 +1,19 @@
-"""断肢急救转诊编排的基础运行入口。"""
+"""断肢急救转诊编排的运行入口。
+
+`python3 service.py --check` 执行自检；`python3 service.py --port 8000`
+启动装载了种子区域网络的编排服务。
+"""
+
+from __future__ import annotations
 
 import argparse
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
+
+from api import create_handler
+from bootstrap import build_network
+from domain import ADVICE_NOTICE, Clock
+from orchestrator import Orchestrator
 
 SERVICE_ID = "limb-referral"
 SERVICE_NAME = "断肢急救转诊编排"
@@ -13,22 +24,23 @@ def health_payload():
     return {"status": "ok", "service": SERVICE_ID, "name": SERVICE_NAME}
 
 
-class Handler(BaseHTTPRequestHandler):
-    """响应健康检查请求。"""
+def build_orchestrator(clock: Clock | None = None) -> Orchestrator:
+    clock = clock or Clock()
+    catalog = build_network(clock.now())
+    return Orchestrator(catalog, clock=clock)
 
-    def do_GET(self):
-        if self.path != "/health":
-            self.send_error(404)
-            return
-        body = json.dumps(health_payload(), ensure_ascii=False).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-    def log_message(self, *_args):
-        return
+def self_check() -> None:
+    """启动前自检：身份、网络装配与核心策略常量完整。"""
+
+    assert SERVICE_NAME == health_payload()["name"]
+    orchestrator = build_orchestrator()
+    assert len(orchestrator.catalog.hospitals()) >= 4
+    assert orchestrator.catalog.hospital("H1") is not None
+    estimate = orchestrator.catalog.estimate_route("H0", "H1", orchestrator.clock.now())
+    assert estimate.exists and estimate.total_minutes() > 0
+    assert ADVICE_NOTICE
+    print("基础检查通过")
 
 
 def main():
@@ -37,10 +49,11 @@ def main():
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     if args.check:
-        assert SERVICE_NAME == health_payload()["name"]
-        print("基础检查通过")
+        self_check()
         return
-    ThreadingHTTPServer(("0.0.0.0", args.port), Handler).serve_forever()
+    orchestrator = build_orchestrator()
+    handler = create_handler(orchestrator)
+    ThreadingHTTPServer(("0.0.0.0", args.port), handler).serve_forever()
 
 
 if __name__ == "__main__":

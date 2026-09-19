@@ -1,20 +1,21 @@
-"""验证基础服务在业务模块开发前保持可运行。"""
+"""验证基础服务在业务模块装配后保持可运行。"""
 
 import json
 import threading
 import unittest
+from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from service import Handler, SERVICE_ID, SERVICE_NAME, health_payload
+from api import create_handler
+from service import SERVICE_ID, SERVICE_NAME, build_orchestrator, health_payload
 
 
 class ServiceContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from http.server import ThreadingHTTPServer
-
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.orchestrator = build_orchestrator()
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(cls.orchestrator))
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         cls.base_url = f"http://127.0.0.1:{cls.server.server_port}"
@@ -37,6 +38,11 @@ class ServiceContractTest(unittest.TestCase):
             self.assertEqual(response.headers.get_content_type(), "application/json")
             self.assertEqual(json.load(response), health_payload())
 
+    def test_seed_network_is_loaded(self):
+        with urlopen(f"{self.base_url}/leases", timeout=2) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.load(response)["leases"], [])
+
     def test_unknown_route_is_not_exposed(self):
         with self.assertRaises(HTTPError) as error:
             urlopen(f"{self.base_url}/unknown", timeout=2)
@@ -46,4 +52,3 @@ class ServiceContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
